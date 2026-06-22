@@ -1139,7 +1139,10 @@ class Scheduler(SchedulerInterface):
         #    computed tokens will be adjusted in update_from_output.
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         for req_id, num_scheduled_token in num_scheduled_tokens.items():
-            request = self.requests[req_id]
+            request = self.requests.get(req_id)
+            if request is None:
+                logger.debug("Request %s missing in _update_after_schedule", req_id)
+                continue
             request.num_computed_tokens += num_scheduled_token
             if self.defer_block_free:
                 # Record the in-flight step, to fence deferred block freeing.
