@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import contextlib
 import math
+import tempfile
 from abc import abstractmethod
 from io import BytesIO
 from typing import Any, ClassVar, Literal, NamedTuple, cast
@@ -112,6 +114,18 @@ def sample_frames_from_video(frames: npt.NDArray, num_frames: int) -> npt.NDArra
     frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
     sampled_frames = frames[frame_indices, ...]
     return sampled_frames
+
+
+@contextlib.contextmanager
+def _get_video_input(data: bytes):
+    # PyAV C-level callbacks overflow on 32-bit integers (>2GB)
+    if len(data) >= 2 * 1024**3 - 1:
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as temp:
+            temp.write(data)
+            temp.flush()
+            yield temp.name
+    else:
+        yield BytesIO(data)
 
 
 class VideoTargetMetadata(NamedTuple):
@@ -576,14 +590,15 @@ class VideoBackend(VideoLoader, OpenCVVideoBackendMixin, PyAVVideoBackendMixin):
             assert not frame_recovery, (
                 "frame_recovery is only available for `opencv` backend"
             )
-            with av.open(BytesIO(data)) as container:
-                source = cls._prepare_source(cls.get_metadata(container))
-                frame_idx = cls.compute_frames_index_to_sample(
-                    source=source, target=target, **kwargs
-                )
-                frames, valid = cls.decode_frames(
-                    container, frame_idx, source.original_fps, source.duration
-                )
+            with _get_video_input(data) as video_input:
+                with av.open(video_input) as container:
+                    source = cls._prepare_source(cls.get_metadata(container))
+                    frame_idx = cls.compute_frames_index_to_sample(
+                        source=source, target=target, **kwargs
+                    )
+                    frames, valid = cls.decode_frames(
+                        container, frame_idx, source.original_fps, source.duration
+                    )
         else:
             raise ValueError(
                 f"Unknown video codec backend {backend!r}; "
