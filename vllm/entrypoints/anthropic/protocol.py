@@ -5,7 +5,7 @@
 import time
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AnthropicError(BaseModel):
@@ -74,13 +74,18 @@ class AnthropicTool(BaseModel):
 
     name: str
     description: str | None = None
-    input_schema: dict[str, Any]
+    input_schema: dict[str, Any] | None = None
+    type: str | None = None
     strict: bool | None = None
     defer_loading: bool | None = None
+
+    model_config = ConfigDict(extra="allow")
 
     @field_validator("input_schema")
     @classmethod
     def validate_input_schema(cls, v):
+        if v is None:
+            return v
         if not isinstance(v, dict):
             raise ValueError("input_schema must be a dictionary")
         if "type" not in v:
