@@ -1536,7 +1536,7 @@ class Qwen3VLMultiModalProcessor(BaseMultiModalProcessor[Qwen3VLProcessingInfo])
         ]
 
         # Build the full token sequence
-        all_token_ids = []
+        all_token_ids = [vision_start_token_id]
         for frame_timestamp_ids, num_tokens in zip(
             timestamp_token_ids, tokens_per_frame
         ):
@@ -1547,6 +1547,8 @@ class Qwen3VLMultiModalProcessor(BaseMultiModalProcessor[Qwen3VLProcessingInfo])
             all_token_ids.append(vision_start_token_id)
             all_token_ids.extend([video_token_id] * num_tokens)
             all_token_ids.append(vision_end_token_id)
+
+        all_token_ids.append(vision_end_token_id)
 
         if select_token_id:
             return PromptUpdateDetails.select_token_id(all_token_ids, video_token_id)
