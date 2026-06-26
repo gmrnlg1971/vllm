@@ -53,12 +53,17 @@ class RealtimeConnection:
         self._is_model_validated = False
 
         self._max_audio_filesize_mb = envs.VLLM_MAX_AUDIO_CLIP_FILESIZE_MB
+        self._idle_timeout_s = envs.VLLM_REALTIME_IDLE_TIMEOUT_S
+        self._watchdog_task: asyncio.Task | None = None
+        self._last_activity_time: float = 0.0
 
     async def handle_connection(self):
         """Main connection loop."""
         await self.websocket.accept()
         logger.debug("WebSocket connection accepted: %s", self.connection_id)
         self._is_connected = True
+        self._last_activity_time = asyncio.get_running_loop().time()
+        self._watchdog_task = asyncio.create_task(self._idle_watchdog())
 
         # Send session created event
         await self.send(SessionCreated())
@@ -134,6 +139,7 @@ class RealtimeConnection:
 
                 # Put audio chunk in queue
                 self.audio_queue.put_nowait(audio_array)
+                self._last_activity_time = asyncio.get_running_loop().time()
 
             except Exception as e:
                 logger.error("Failed to decode audio: %s", e)
@@ -152,6 +158,7 @@ class RealtimeConnection:
                 return
 
             commit_event = InputAudioBufferCommit(**event)
+            self._last_activity_time = asyncio.get_running_loop().time()
             # final signals that the audio is finished
             if commit_event.final:
                 self.audio_queue.put_nowait(None)
@@ -279,6 +286,10 @@ class RealtimeConnection:
 
     async def cleanup(self):
         """Cleanup resources."""
+        # Cancel watchdog
+        if self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+
         # Signal audio stream to stop
         self.audio_queue.put_nowait(None)
 
@@ -287,3 +298,26 @@ class RealtimeConnection:
             self.generation_task.cancel()
 
         logger.debug("Connection cleanup complete: %s", self.connection_id)
+
+    async def _idle_watchdog(self):
+        """Monitors the connection for idle timeout.
+        If no valid audio append or commit occurs within the timeout,
+        closes the session gracefully.
+        """
+        try:
+            while self._is_connected:
+                now = asyncio.get_running_loop().time()
+                idle_time = now - self._last_activity_time
+                if idle_time >= self._idle_timeout_s:
+                    logger.warning("Realtime connection %s idle for %s seconds, closing.", self.connection_id, idle_time)
+                    self.audio_queue.put_nowait(None)
+                    await asyncio.sleep(5)
+                    if self._is_connected:
+                        await self.websocket.close(code=1000, reason="Idle timeout")
+                        self._is_connected = False
+                    break
+                await asyncio.sleep(self._idle_timeout_s - idle_time)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.exception("Watchdog error: %s", e)
